@@ -435,7 +435,8 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleBatchActorOperations
     Metrics->SetNumberField(TEXT("failed"), FailureCount);
 
     TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
-    ResultObj->SetBoolField(TEXT("success"), true);
+    const bool bOverallSuccess = (FailureCount == 0) || (SuccessCount > 0);
+    ResultObj->SetBoolField(TEXT("success"), bOverallSuccess);
     ResultObj->SetStringField(TEXT("status"), FailureCount == 0 ? TEXT("success") : TEXT("partial"));
     ResultObj->SetStringField(
         TEXT("message"),

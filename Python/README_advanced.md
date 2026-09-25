@@ -6,7 +6,7 @@ A streamlined version of the Unreal MCP server that focuses only on advanced com
 
 This server contains only the essential tools needed for advanced level building and composition:
 
-### Essential Actor Management (8 tools)
+### Essential Actor Management (7 tools)
 - `get_actors_in_level()` - List all actors
 - `find_actors_by_name(pattern)` - Find actors by pattern
 - `delete_actor(name)` - Remove actors

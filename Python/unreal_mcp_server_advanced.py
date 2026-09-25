@@ -641,9 +641,10 @@ def inspect_scene(
     if summary_only:
         type_counts: Dict[str, int] = {}
         sample_names: List[str] = []
-        for actor in actors[:max_items]:
+        for actor in actors:
             actor_type = actor.get("class", "Unknown") if isinstance(actor, dict) else "Unknown"
             type_counts[actor_type] = type_counts.get(actor_type, 0) + 1
+        for actor in actors[:max_items]:
             if isinstance(actor, dict) and actor.get("name"):
                 sample_names.append(actor["name"])
         return _structured_response(

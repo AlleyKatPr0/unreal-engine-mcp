@@ -290,6 +290,14 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                     ErrorMessage = ResultJson->GetStringField(TEXT("error"));
                 }
             }
+            else if (ResultJson->HasField(TEXT("status")))
+            {
+                FString InnerStatus;
+                if (ResultJson->TryGetStringField(TEXT("status"), InnerStatus))
+                {
+                    bSuccess = !InnerStatus.Equals(TEXT("error"), ESearchCase::IgnoreCase);
+                }
+            }
             
             if (bSuccess)
             {
