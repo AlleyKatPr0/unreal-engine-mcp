@@ -595,15 +595,16 @@ def batch_actor_operations(
             "continue_on_error": continue_on_error
         }) or {}
 
-        if response.get("status") == "error":
+        result = response.get("result", {})
+        if response.get("status") == "error" and result.get("status") != "partial":
             error_msg = response.get("error", "Batch actor operations failed")
             return _structured_response(False, "error", error_msg, error=error_msg, raw=response)
 
-        result = response.get("result", {})
         status = result.get("status", "success")
         results = result.get("results", response.get("results", []))
         metrics = result.get("metrics", response.get("metrics", {}))
-        success = status == "success" and metrics.get("failed", 0) == 0
+        failed_count = metrics.get("failed", 0) if isinstance(metrics, dict) else 0
+        success = status == "success" and failed_count == 0 and response.get("success", True) is not False
         message = result.get("message", response.get("message", "Batch actor operations complete"))
 
         return _structured_response(
@@ -1488,11 +1489,14 @@ def create_maze(
     cols: int = 8,
     cell_size: float = 300.0,
     wall_height: int = 3,
-    location: List[float] = [0.0, 0.0, 0.0],
+    location: Optional[List[float]] = None,
     dry_run: bool = False
 ) -> Dict[str, Any]:
     """Create a proper solvable maze with entrance, exit, and guaranteed path using recursive backtracking algorithm."""
     try:
+        if location is None:
+            location = [0.0, 0.0, 0.0]
+
         if dry_run:
             estimate = _estimate_maze_counts(rows, cols, wall_height)
             return _structured_response(
@@ -1758,7 +1762,7 @@ def set_mesh_material_color(
 def create_town(
     town_size: str = "medium",  # "small", "medium", "large", "metropolis"
     building_density: float = 0.7,  # 0.0 to 1.0
-    location: List[float] = [0.0, 0.0, 0.0],
+    location: Optional[List[float]] = None,
     name_prefix: str = "Town",
     include_infrastructure: bool = True,
     architectural_style: str = "mixed",  # "modern", "cottage", "mansion", "mixed", "downtown", "futuristic"
@@ -1766,6 +1770,9 @@ def create_town(
 ) -> Dict[str, Any]:
     """Create a full dynamic town with buildings, streets, infrastructure, and vehicles."""
     try:
+        if location is None:
+            location = [0.0, 0.0, 0.0]
+
         import random
         random.seed()  # Use different seed each time for variety
         

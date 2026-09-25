@@ -393,8 +393,22 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleBatchActorOperations
             );
         }
 
-        const bool bItemSuccess = OperationResponse.IsValid() &&
-            (!OperationResponse->HasField(TEXT("success")) || OperationResponse->GetBoolField(TEXT("success")));
+        bool bItemSuccess = false;
+        if (OperationResponse.IsValid())
+        {
+            if (OperationResponse->HasField(TEXT("success")))
+            {
+                bItemSuccess = OperationResponse->GetBoolField(TEXT("success"));
+            }
+            else if (OperationResponse->HasField(TEXT("status")))
+            {
+                FString InnerStatus;
+                if (OperationResponse->TryGetStringField(TEXT("status"), InnerStatus))
+                {
+                    bItemSuccess = !InnerStatus.Equals(TEXT("error"), ESearchCase::IgnoreCase);
+                }
+            }
+        }
 
         ItemResult->SetBoolField(TEXT("success"), bItemSuccess);
         ItemResult->SetStringField(TEXT("status"), bItemSuccess ? TEXT("success") : TEXT("error"));
@@ -435,7 +449,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleBatchActorOperations
     Metrics->SetNumberField(TEXT("failed"), FailureCount);
 
     TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
-    const bool bOverallSuccess = (FailureCount == 0) || (SuccessCount > 0);
+    const bool bOverallSuccess = (FailureCount == 0);
     ResultObj->SetBoolField(TEXT("success"), bOverallSuccess);
     ResultObj->SetStringField(TEXT("status"), FailureCount == 0 ? TEXT("success") : TEXT("partial"));
     ResultObj->SetStringField(
