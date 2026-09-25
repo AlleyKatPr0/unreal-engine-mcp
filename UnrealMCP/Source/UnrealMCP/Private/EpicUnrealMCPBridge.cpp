@@ -223,6 +223,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("spawn_actor") ||
                      CommandType == TEXT("delete_actor") || 
                      CommandType == TEXT("set_actor_transform") ||
+                     CommandType == TEXT("batch_actor_operations") ||
                      CommandType == TEXT("spawn_blueprint_actor"))
             {
                 ResultJson = EditorCommands->HandleCommand(CommandType, Params);
@@ -265,7 +266,10 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             else
             {
                 ResponseJson->SetStringField(TEXT("status"), TEXT("error"));
-                ResponseJson->SetStringField(TEXT("error"), FString::Printf(TEXT("Unknown command: %s"), *CommandType));
+                const FString ErrorText = FString::Printf(TEXT("Unknown command: %s"), *CommandType);
+                ResponseJson->SetBoolField(TEXT("success"), false);
+                ResponseJson->SetStringField(TEXT("error"), ErrorText);
+                ResponseJson->SetStringField(TEXT("message"), ErrorText);
                 
                 FString ResultString;
                 TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResultString);
@@ -291,19 +295,55 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             {
                 // Set success status and include the result
                 ResponseJson->SetStringField(TEXT("status"), TEXT("success"));
+                ResponseJson->SetBoolField(TEXT("success"), true);
+                ResponseJson->SetStringField(TEXT("message"), TEXT("Command executed"));
                 ResponseJson->SetObjectField(TEXT("result"), ResultJson);
+                if (ResultJson->HasField(TEXT("results")))
+                {
+                    const TArray<TSharedPtr<FJsonValue>>* ResultsArray = nullptr;
+                    if (ResultJson->TryGetArrayField(TEXT("results"), ResultsArray) && ResultsArray)
+                    {
+                        ResponseJson->SetArrayField(TEXT("results"), *ResultsArray);
+                    }
+                }
+                if (ResultJson->HasField(TEXT("metrics")))
+                {
+                    TSharedPtr<FJsonObject> MetricsObject = nullptr;
+                    ResultJson->TryGetObjectField(TEXT("metrics"), MetricsObject);
+                    if (MetricsObject.IsValid())
+                    {
+                        ResponseJson->SetObjectField(TEXT("metrics"), MetricsObject);
+                    }
+                }
+                if (ResultJson->HasField(TEXT("message")))
+                {
+                    FString ResultMessage;
+                    if (ResultJson->TryGetStringField(TEXT("message"), ResultMessage))
+                    {
+                        ResponseJson->SetStringField(TEXT("message"), ResultMessage);
+                    }
+                }
             }
             else
             {
                 // Set error status and include the error message
                 ResponseJson->SetStringField(TEXT("status"), TEXT("error"));
+                ResponseJson->SetBoolField(TEXT("success"), false);
                 ResponseJson->SetStringField(TEXT("error"), ErrorMessage);
+                ResponseJson->SetStringField(TEXT("message"), ErrorMessage);
+                if (ResultJson.IsValid())
+                {
+                    ResponseJson->SetObjectField(TEXT("result"), ResultJson);
+                }
             }
         }
         catch (const std::exception& e)
         {
             ResponseJson->SetStringField(TEXT("status"), TEXT("error"));
-            ResponseJson->SetStringField(TEXT("error"), UTF8_TO_TCHAR(e.what()));
+            ResponseJson->SetBoolField(TEXT("success"), false);
+            const FString ErrorText = UTF8_TO_TCHAR(e.what());
+            ResponseJson->SetStringField(TEXT("error"), ErrorText);
+            ResponseJson->SetStringField(TEXT("message"), ErrorText);
         }
         
         FString ResultString;
