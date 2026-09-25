@@ -14,10 +14,14 @@ Create complete urban environments with buildings, roads, and infrastructure.
 - `location` (array): [X, Y, Z] world position for town center
 - `include_infrastructure` (bool): Add roads, utilities, etc.
 - `name_prefix` (string): Prefix for spawned building actors
+- `dry_run` (bool): Preview estimated actor counts without spawning
 
 **Example:**
 ```bash
 create_town(town_size="medium", architectural_style="modern", building_density=0.8, location=[0, 0, 0])
+
+# Estimate first (no scene mutation)
+create_town(town_size="large", building_density=0.9, dry_run=True)
 ```
 
 ### construct_house  
@@ -94,6 +98,7 @@ Generate solvable mazes using recursive backtracking algorithm.
 - `cell_size` (float): Size of each maze cell in cm (default: 300)
 - `wall_height` (int): Height of walls in block layers (default: 3)
 - `location` (array): Maze center position
+- `dry_run` (bool): Estimate wall/marker counts without spawning
 
 **Features:**
 - **Guaranteed Solvable**: Uses recursive backtracking for valid paths
@@ -104,7 +109,38 @@ Generate solvable mazes using recursive backtracking algorithm.
 **Example:**
 ```bash
 create_maze(rows=12, cols=12, wall_height=4, cell_size=250, location=[0, 0, 0])
+
+# Estimate first
+create_maze(rows=12, cols=12, wall_height=4, dry_run=True)
 ```
+
+## 👀 Scene Awareness & Batch Ops
+
+### batch_actor_operations
+Execute multiple actor operations in one Unreal command. Supports `spawn_actor`, `set_actor_transform`, and `delete_actor`.
+
+**Parameters:**
+- `operations` (array): List of operation objects (`action`, `params`)
+- `continue_on_error` (bool): Keep processing after a failed item
+
+**Returns:**
+- Structured `results` per item with `success`, `status`, `message`, and optional `error`
+- `metrics` summary with succeeded/failed counts
+
+### inspect_scene
+Inspect current actors with either concise summary or detail.
+
+**Parameters:**
+- `summary_only` (bool): Return type counts + sample names when true
+- `max_items` (int): Max actors to include
+- `name_filter` (string): Optional name filter
+
+### inspect_actor_components
+Inspect a specific actor match and return concise or full detail.
+
+**Parameters:**
+- `actor_name` (string): Actor name or pattern
+- `summary_only` (bool): Return compact summary when true
 
 ### create_pyramid
 Build stepped pyramids from stacked blocks.

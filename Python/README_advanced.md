@@ -6,12 +6,14 @@ A streamlined version of the Unreal MCP server that focuses only on advanced com
 
 This server contains only the essential tools needed for advanced level building and composition:
 
-### Essential Actor Management (5 tools)
+### Essential Actor Management (8 tools)
 - `get_actors_in_level()` - List all actors
 - `find_actors_by_name(pattern)` - Find actors by pattern
-- `spawn_actor(name, type, location, rotation)` - Create basic actors
 - `delete_actor(name)` - Remove actors
 - `set_actor_transform(name, location, rotation, scale)` - Modify transforms
+- `batch_actor_operations(operations, continue_on_error)` - Spawn/update/delete in one command with per-item results
+- `inspect_scene(summary_only, max_items, name_filter)` - Scene-aware summaries or detailed actor snapshots
+- `inspect_actor_components(actor_name, summary_only)` - Inspect an actor with concise or full detail
 
 ### Essential Blueprint Tools (6 tools)
 *Minimal set needed for physics actors*
@@ -31,7 +33,24 @@ This server contains only the essential tools needed for advanced level building
 - `construct_house(width, depth, height, location, ...)` - **Enhanced** game-ready houses
 - `create_arch(radius, segments, location, ...)` - Arch structures
 - `spawn_physics_blueprint_actor (name, mesh_path, location, mass, ...)` - Physics objects
-- `create_maze(rows, cols, cell_size, wall_height, location)` - Grid mazes
+- `create_maze(rows, cols, cell_size, wall_height, location, dry_run)` - Grid mazes with estimate mode
+- `create_town(..., dry_run)` - Town generator with estimate mode
+- `create_suspension_bridge(..., dry_run)` - Bridge generator with estimate mode
+- `create_aqueduct(..., dry_run)` - Aqueduct generator with estimate mode
+
+## AI-Assistant Focused Additions
+
+- **Batch operations for fewer round trips:** `batch_actor_operations` accepts mixed spawn/transform/delete items and returns structured per-item status.
+- **Preview before mutate:** high-volume generators expose `dry_run=True` estimation so models can plan actor cost before scene changes.
+- **Structured output envelope:** new/updated paths use compact fields such as `success`, `status`, `message`, `metrics`, `results`, and `error`.
+- **Scene awareness helpers:** use `inspect_scene` and `inspect_actor_components` to reason about existing scene state before generating more actors.
+
+## Manual Validation Path
+
+1. Call `create_town(town_size="medium", dry_run=True)` and confirm estimate-only output (`dry_run: true`, `metrics`, no spawned actors).
+2. Call `create_maze(rows=8, cols=8, dry_run=True)` and confirm estimate details.
+3. Run one `batch_actor_operations` request with mixed valid and invalid operations and verify partial result reporting per item.
+4. Run `inspect_scene(summary_only=True)` then `inspect_scene(summary_only=False, max_items=5)` and confirm concise vs detailed output.
 
 ## Enhanced House Construction
 

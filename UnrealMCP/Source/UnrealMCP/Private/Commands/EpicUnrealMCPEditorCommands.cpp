@@ -50,6 +50,10 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleCommand(const FStrin
     {
         return HandleSetActorTransform(Params);
     }
+    else if (CommandType == TEXT("batch_actor_operations"))
+    {
+        return HandleBatchActorOperations(Params);
+    }
     // Blueprint actor spawning
     else if (CommandType == TEXT("spawn_blueprint_actor"))
     {
@@ -298,6 +302,149 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleSetActorTransform(co
 
     // Return updated actor info
     return FEpicUnrealMCPCommonUtils::ActorToJsonObject(TargetActor, true);
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleBatchActorOperations(const TSharedPtr<FJsonObject>& Params)
+{
+    const TArray<TSharedPtr<FJsonValue>>* Operations = nullptr;
+    if (!Params->TryGetArrayField(TEXT("operations"), Operations) || !Operations)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing or invalid 'operations' array"));
+    }
+
+    bool bContinueOnError = true;
+    Params->TryGetBoolField(TEXT("continue_on_error"), bContinueOnError);
+
+    TArray<TSharedPtr<FJsonValue>> Results;
+    int32 SuccessCount = 0;
+    int32 FailureCount = 0;
+
+    for (int32 Index = 0; Index < Operations->Num(); ++Index)
+    {
+        const TSharedPtr<FJsonValue>& OperationValue = (*Operations)[Index];
+        TSharedPtr<FJsonObject> OperationObject = OperationValue.IsValid() ? OperationValue->AsObject() : nullptr;
+
+        TSharedPtr<FJsonObject> ItemResult = MakeShared<FJsonObject>();
+        ItemResult->SetNumberField(TEXT("index"), Index);
+
+        if (!OperationObject.IsValid())
+        {
+            ItemResult->SetBoolField(TEXT("success"), false);
+            ItemResult->SetStringField(TEXT("status"), TEXT("error"));
+            ItemResult->SetStringField(TEXT("message"), TEXT("Operation must be an object"));
+            ItemResult->SetStringField(TEXT("error"), TEXT("Operation must be an object"));
+            Results.Add(MakeShared<FJsonValueObject>(ItemResult));
+            FailureCount++;
+
+            if (!bContinueOnError)
+            {
+                break;
+            }
+            continue;
+        }
+
+        FString Action;
+        if (!OperationObject->TryGetStringField(TEXT("action"), Action))
+        {
+            ItemResult->SetBoolField(TEXT("success"), false);
+            ItemResult->SetStringField(TEXT("status"), TEXT("error"));
+            ItemResult->SetStringField(TEXT("message"), TEXT("Missing 'action'"));
+            ItemResult->SetStringField(TEXT("error"), TEXT("Missing 'action'"));
+            Results.Add(MakeShared<FJsonValueObject>(ItemResult));
+            FailureCount++;
+
+            if (!bContinueOnError)
+            {
+                break;
+            }
+            continue;
+        }
+
+        ItemResult->SetStringField(TEXT("action"), Action);
+
+        TSharedPtr<FJsonObject> ActionParams = MakeShared<FJsonObject>();
+        TSharedPtr<FJsonObject> ProvidedParams = nullptr;
+        if (OperationObject->TryGetObjectField(TEXT("params"), ProvidedParams) && ProvidedParams.IsValid())
+        {
+            ActionParams = ProvidedParams;
+        }
+        else
+        {
+            ActionParams = OperationObject;
+        }
+
+        TSharedPtr<FJsonObject> OperationResponse;
+        if (Action == TEXT("spawn_actor"))
+        {
+            OperationResponse = HandleSpawnActor(ActionParams);
+        }
+        else if (Action == TEXT("set_actor_transform"))
+        {
+            OperationResponse = HandleSetActorTransform(ActionParams);
+        }
+        else if (Action == TEXT("delete_actor"))
+        {
+            OperationResponse = HandleDeleteActor(ActionParams);
+        }
+        else
+        {
+            OperationResponse = FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Unsupported action: %s"), *Action)
+            );
+        }
+
+        const bool bItemSuccess = OperationResponse.IsValid() &&
+            (!OperationResponse->HasField(TEXT("success")) || OperationResponse->GetBoolField(TEXT("success")));
+
+        ItemResult->SetBoolField(TEXT("success"), bItemSuccess);
+        ItemResult->SetStringField(TEXT("status"), bItemSuccess ? TEXT("success") : TEXT("error"));
+
+        if (bItemSuccess)
+        {
+            ItemResult->SetStringField(TEXT("message"), TEXT("Operation completed"));
+            ItemResult->SetObjectField(TEXT("result"), OperationResponse);
+            SuccessCount++;
+        }
+        else
+        {
+            FString ErrorMessage = TEXT("Operation failed");
+            if (OperationResponse.IsValid() && OperationResponse->HasField(TEXT("error")))
+            {
+                ErrorMessage = OperationResponse->GetStringField(TEXT("error"));
+            }
+            ItemResult->SetStringField(TEXT("message"), ErrorMessage);
+            ItemResult->SetStringField(TEXT("error"), ErrorMessage);
+            if (OperationResponse.IsValid())
+            {
+                ItemResult->SetObjectField(TEXT("result"), OperationResponse);
+            }
+            FailureCount++;
+        }
+
+        Results.Add(MakeShared<FJsonValueObject>(ItemResult));
+
+        if (!bContinueOnError && !bItemSuccess)
+        {
+            break;
+        }
+    }
+
+    TSharedPtr<FJsonObject> Metrics = MakeShared<FJsonObject>();
+    Metrics->SetNumberField(TEXT("total"), Results.Num());
+    Metrics->SetNumberField(TEXT("succeeded"), SuccessCount);
+    Metrics->SetNumberField(TEXT("failed"), FailureCount);
+
+    TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+    ResultObj->SetBoolField(TEXT("success"), true);
+    ResultObj->SetStringField(TEXT("status"), FailureCount == 0 ? TEXT("success") : TEXT("partial"));
+    ResultObj->SetStringField(
+        TEXT("message"),
+        FString::Printf(TEXT("Executed %d operations (%d succeeded, %d failed)"), Results.Num(), SuccessCount, FailureCount)
+    );
+    ResultObj->SetObjectField(TEXT("metrics"), Metrics);
+    ResultObj->SetArrayField(TEXT("results"), Results);
+
+    return ResultObj;
 }
 
 TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleSpawnBlueprintActor(const TSharedPtr<FJsonObject>& Params)

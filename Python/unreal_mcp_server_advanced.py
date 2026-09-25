@@ -99,7 +99,8 @@ class UnrealConnection:
         "construct_mansion",
         "create_suspension_bridge",
         "create_aqueduct",
-        "create_maze"
+        "create_maze",
+        "batch_actor_operations"
     }
     
     def __init__(self):
@@ -382,11 +383,25 @@ class UnrealConnection:
                 # Normalize error responses
                 if response.get("status") == "error":
                     error_msg = response.get("error") or response.get("message", "Unknown error")
+                    response["success"] = False
+                    response.setdefault("message", error_msg)
+                    response.setdefault("error", error_msg)
                     logger.warning(f"Unreal returned error: {error_msg}")
                 elif response.get("success") is False:
                     error_msg = response.get("error") or response.get("message", "Unknown error")
-                    response = {"status": "error", "error": error_msg}
+                    response = {"status": "error", "success": False, "message": error_msg, "error": error_msg}
                     logger.warning(f"Unreal returned failure: {error_msg}")
+                else:
+                    response.setdefault("status", "success")
+                    response.setdefault("success", True)
+                    response.setdefault("message", "Command executed")
+
+                # Promote commonly-used nested fields for model-friendly parsing
+                if "result" in response and isinstance(response["result"], dict):
+                    if "metrics" in response["result"] and "metrics" not in response:
+                        response["metrics"] = response["result"]["metrics"]
+                    if "results" in response["result"] and "results" not in response:
+                        response["results"] = response["result"]["results"]
                 
                 return response
                 
@@ -446,6 +461,89 @@ mcp = FastMCP(
     lifespan=server_lifespan
 )
 
+def _structured_response(
+    success: bool,
+    status: str,
+    message: str,
+    results: Optional[List[Dict[str, Any]]] = None,
+    metrics: Optional[Dict[str, Any]] = None,
+    error: Optional[str] = None,
+    **extra: Any
+) -> Dict[str, Any]:
+    """Build a model-friendly response envelope."""
+    response: Dict[str, Any] = {
+        "success": success,
+        "status": status,
+        "message": message
+    }
+    if results is not None:
+        response["results"] = results
+    if metrics is not None:
+        response["metrics"] = metrics
+    if error:
+        response["error"] = error
+    response.update(extra)
+    return response
+
+
+def _estimate_town_counts(town_size: str, building_density: float, include_infrastructure: bool) -> Dict[str, Any]:
+    """Estimate create_town actor count without changing the scene."""
+    town_params = {
+        "small": {"blocks": 3, "population": 20},
+        "medium": {"blocks": 5, "population": 50},
+        "large": {"blocks": 7, "population": 100},
+        "metropolis": {"blocks": 10, "population": 200}
+    }
+    params = town_params.get(town_size, town_params["medium"])
+    blocks = params["blocks"]
+    target_population = int(params["population"] * max(0.0, min(1.0, building_density)))
+    max_possible = blocks * blocks
+    estimated_buildings = min(max_possible, target_population)
+
+    intersections = max(0, (blocks + 1) * (blocks + 1))
+    street_segments = (blocks + 1) * blocks * 2
+
+    infrastructure_estimate = 0
+    if include_infrastructure:
+        infrastructure_estimate += intersections * 2  # traffic lights + signs
+        infrastructure_estimate += street_segments * 4  # lights + sidewalks + furniture + utilities
+        infrastructure_estimate += max(1, estimated_buildings // 3)  # vehicles
+        infrastructure_estimate += max(1, blocks * blocks // 2)  # decorations
+        if town_size in ["large", "metropolis"]:
+            infrastructure_estimate += max(10, blocks * blocks)  # central plaza elements
+
+    total_estimate = street_segments + estimated_buildings + infrastructure_estimate
+    return {
+        "town_size": town_size,
+        "blocks": blocks,
+        "estimated_street_segments": street_segments,
+        "estimated_buildings": estimated_buildings,
+        "estimated_infrastructure": infrastructure_estimate,
+        "estimated_total_actors": total_estimate
+    }
+
+
+def _estimate_maze_counts(rows: int, cols: int, wall_height: int) -> Dict[str, Any]:
+    """Estimate create_maze wall/marker counts without spawning actors."""
+    maze_height = rows * 2 + 1
+    maze_width = cols * 2 + 1
+    perimeter_walls = (maze_height * 2) + (maze_width * 2) - 4
+    max_internal_walls = max(0, (rows * cols * 2) - rows - cols)
+    estimated_wall_cells = perimeter_walls + max_internal_walls // 2
+    estimated_wall_actors = estimated_wall_cells * max(1, wall_height)
+    marker_count = 2
+    return {
+        "rows": rows,
+        "cols": cols,
+        "wall_height": wall_height,
+        "maze_grid_size": [maze_height, maze_width],
+        "estimated_wall_cells": estimated_wall_cells,
+        "estimated_wall_actors": estimated_wall_actors,
+        "estimated_marker_actors": marker_count,
+        "estimated_total_actors": estimated_wall_actors + marker_count
+    }
+
+
 # Essential Actor Management Tools
 @mcp.tool()
 def get_actors_in_level(random_string: str = "") -> Dict[str, Any]:
@@ -474,6 +572,131 @@ def find_actors_by_name(pattern: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"find_actors_by_name error: {e}")
         return {"success": False, "message": str(e)}
+
+
+@mcp.tool()
+def batch_actor_operations(
+    operations: List[Dict[str, Any]],
+    continue_on_error: bool = True
+) -> Dict[str, Any]:
+    """
+    Execute multiple actor operations (spawn/transform/delete) in one Unreal command.
+    """
+    unreal = get_unreal_connection()
+    if not unreal:
+        return _structured_response(False, "error", "Failed to connect to Unreal Engine", error="Failed to connect to Unreal Engine")
+
+    try:
+        if not isinstance(operations, list) or not operations:
+            return _structured_response(False, "error", "operations must be a non-empty list", error="Invalid operations")
+
+        response = unreal.send_command("batch_actor_operations", {
+            "operations": operations,
+            "continue_on_error": continue_on_error
+        }) or {}
+
+        if response.get("status") == "error":
+            error_msg = response.get("error", "Batch actor operations failed")
+            return _structured_response(False, "error", error_msg, error=error_msg, raw=response)
+
+        result = response.get("result", {})
+        status = result.get("status", "success")
+        results = result.get("results", response.get("results", []))
+        metrics = result.get("metrics", response.get("metrics", {}))
+        success = status == "success" and metrics.get("failed", 0) == 0
+        message = result.get("message", response.get("message", "Batch actor operations complete"))
+
+        return _structured_response(
+            success=success,
+            status=status,
+            message=message,
+            results=results,
+            metrics=metrics,
+            raw=response
+        )
+    except Exception as e:
+        logger.error(f"batch_actor_operations error: {e}")
+        return _structured_response(False, "error", str(e), error=str(e))
+
+
+@mcp.tool()
+def inspect_scene(
+    summary_only: bool = True,
+    max_items: int = 50,
+    name_filter: str = ""
+) -> Dict[str, Any]:
+    """Inspect scene actors with concise summary or fuller detail."""
+    actors_response = get_actors_in_level()
+    if not actors_response or actors_response.get("status") == "error" or actors_response.get("success") is False:
+        error_msg = actors_response.get("error") if isinstance(actors_response, dict) else "Failed to inspect scene"
+        error_msg = error_msg or actors_response.get("message", "Failed to inspect scene")
+        return _structured_response(False, "error", error_msg, error=error_msg)
+
+    result = actors_response.get("result", actors_response)
+    actors = result.get("actors", [])
+    if name_filter:
+        actors = [a for a in actors if isinstance(a, dict) and name_filter.lower() in a.get("name", "").lower()]
+
+    total = len(actors)
+    if summary_only:
+        type_counts: Dict[str, int] = {}
+        sample_names: List[str] = []
+        for actor in actors[:max_items]:
+            actor_type = actor.get("class", "Unknown") if isinstance(actor, dict) else "Unknown"
+            type_counts[actor_type] = type_counts.get(actor_type, 0) + 1
+            if isinstance(actor, dict) and actor.get("name"):
+                sample_names.append(actor["name"])
+        return _structured_response(
+            True,
+            "success",
+            f"Scene summary generated for {total} actors",
+            metrics={"total_actors": total, "returned_samples": len(sample_names)},
+            results=[{"type_counts": type_counts, "sample_names": sample_names}]
+        )
+
+    detail = actors[:max_items]
+    return _structured_response(
+        True,
+        "success",
+        f"Scene detail returned ({len(detail)} of {total} actors)",
+        metrics={"total_actors": total, "returned": len(detail)},
+        results=detail
+    )
+
+
+@mcp.tool()
+def inspect_actor_components(
+    actor_name: str,
+    summary_only: bool = True
+) -> Dict[str, Any]:
+    """Inspect actor records by name and summarize key fields/components."""
+    matches_response = find_actors_by_name(actor_name)
+    if not matches_response or matches_response.get("status") == "error" or matches_response.get("success") is False:
+        error_msg = matches_response.get("error") if isinstance(matches_response, dict) else "Failed to inspect actor"
+        error_msg = error_msg or matches_response.get("message", "Failed to inspect actor")
+        return _structured_response(False, "error", error_msg, error=error_msg)
+
+    result = matches_response.get("result", matches_response)
+    actors = [a for a in result.get("actors", []) if isinstance(a, dict)]
+    exact = [a for a in actors if a.get("name") == actor_name]
+    selected = exact[0] if exact else (actors[0] if actors else None)
+    if not selected:
+        return _structured_response(False, "error", f"Actor not found: {actor_name}", error=f"Actor not found: {actor_name}")
+
+    if summary_only:
+        keys = list(selected.keys())
+        component_keys = [k for k in keys if "component" in k.lower()]
+        summary = {
+            "name": selected.get("name"),
+            "class": selected.get("class"),
+            "location": selected.get("location"),
+            "rotation": selected.get("rotation"),
+            "scale": selected.get("scale"),
+            "available_component_fields": component_keys
+        }
+        return _structured_response(True, "success", "Actor summary returned", results=[summary], metrics={"match_count": len(actors)})
+
+    return _structured_response(True, "success", "Actor detail returned", results=[selected], metrics={"match_count": len(actors)})
 
 
 
@@ -1264,14 +1487,27 @@ def create_maze(
     cols: int = 8,
     cell_size: float = 300.0,
     wall_height: int = 3,
-    location: List[float] = [0.0, 0.0, 0.0]
+    location: List[float] = [0.0, 0.0, 0.0],
+    dry_run: bool = False
 ) -> Dict[str, Any]:
     """Create a proper solvable maze with entrance, exit, and guaranteed path using recursive backtracking algorithm."""
     try:
+        if dry_run:
+            estimate = _estimate_maze_counts(rows, cols, wall_height)
+            return _structured_response(
+                success=True,
+                status="success",
+                message="Dry run only: maze estimate generated without spawning actors",
+                metrics=estimate,
+                results=[],
+                dry_run=True,
+                explanation="Estimated counts are based on maze dimensions and wall height. Actual wall count varies with random path carving."
+            )
+
         unreal = get_unreal_connection()
         if not unreal:
             return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            
+             
         import random
         spawned = []
         
@@ -1524,13 +1760,26 @@ def create_town(
     location: List[float] = [0.0, 0.0, 0.0],
     name_prefix: str = "Town",
     include_infrastructure: bool = True,
-    architectural_style: str = "mixed"  # "modern", "cottage", "mansion", "mixed", "downtown", "futuristic"
+    architectural_style: str = "mixed",  # "modern", "cottage", "mansion", "mixed", "downtown", "futuristic"
+    dry_run: bool = False
 ) -> Dict[str, Any]:
     """Create a full dynamic town with buildings, streets, infrastructure, and vehicles."""
     try:
         import random
         random.seed()  # Use different seed each time for variety
         
+        if dry_run:
+            estimate = _estimate_town_counts(town_size, building_density, include_infrastructure)
+            return _structured_response(
+                success=True,
+                status="success",
+                message="Dry run only: town estimate generated without spawning actors",
+                metrics=estimate,
+                results=[],
+                dry_run=True,
+                explanation="Estimate includes streets, expected building count, and infrastructure approximation based on size and density."
+            )
+
         unreal = get_unreal_connection()
         if not unreal:
             return {"success": False, "message": "Failed to connect to Unreal Engine"}
@@ -1795,14 +2044,6 @@ def create_suspension_bridge(
         import time
         start_time = time.perf_counter()
         
-        unreal = get_unreal_connection()
-        if not unreal:
-            return {"success": False, "message": "Failed to connect to Unreal Engine"}
-        
-        logger.info(f"Creating suspension bridge: span={span_length}, width={deck_width}, height={tower_height}")
-        
-        all_actors = []
-        
         # Calculate expected actor counts for dry run
         if dry_run:
             expected_towers = 10  # 2 towers with main, base, top, and 2 attachment points each
@@ -1814,7 +2055,10 @@ def create_suspension_bridge(
             
             return {
                 "success": True,
+                "status": "success",
                 "dry_run": True,
+                "message": "Dry run only: suspension bridge estimate generated without spawning actors",
+                "explanation": "Estimate is based on span, deck width, and module size. Smaller module sizes increase actor count.",
                 "metrics": {
                     "total_actors": expected_towers + expected_deck + expected_cables + expected_suspenders,
                     "deck_segments": expected_deck,
@@ -1827,6 +2071,14 @@ def create_suspension_bridge(
                     "elapsed_ms": elapsed_ms
                 }
             }
+
+        unreal = get_unreal_connection()
+        if not unreal:
+            return {"success": False, "message": "Failed to connect to Unreal Engine"}
+        
+        logger.info(f"Creating suspension bridge: span={span_length}, width={deck_width}, height={tower_height}")
+        
+        all_actors = []
         
         # Build the bridge structure
         counts = build_suspension_bridge_structure(
@@ -1918,14 +2170,6 @@ def create_aqueduct(
         import time
         start_time = time.perf_counter()
         
-        unreal = get_unreal_connection()
-        if not unreal:
-            return {"success": False, "message": "Failed to connect to Unreal Engine"}
-        
-        logger.info(f"Creating aqueduct: {arches} arches, {tiers} tiers, radius={arch_radius}")
-        
-        all_actors = []
-        
         # Calculate dimensions
         total_length = arches * (2 * arch_radius + pier_width) + pier_width
         
@@ -1949,7 +2193,10 @@ def create_aqueduct(
             
             return {
                 "success": True,
+                "status": "success",
                 "dry_run": True,
+                "message": "Dry run only: aqueduct estimate generated without spawning actors",
+                "explanation": "Estimate is based on arches, tiers, arch radius, and module size. Smaller module sizes increase actor count.",
                 "metrics": {
                     "total_actors": expected_arch_segments + expected_piers + expected_deck,
                     "arch_segments": expected_arch_segments,
@@ -1961,6 +2208,14 @@ def create_aqueduct(
                     "elapsed_ms": elapsed_ms
                 }
             }
+
+        unreal = get_unreal_connection()
+        if not unreal:
+            return {"success": False, "message": "Failed to connect to Unreal Engine"}
+        
+        logger.info(f"Creating aqueduct: {arches} arches, {tiers} tiers, radius={arch_radius}")
+        
+        all_actors = []
         
         # Build the aqueduct structure
         counts = build_aqueduct_structure(
