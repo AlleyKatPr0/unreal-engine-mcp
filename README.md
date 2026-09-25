@@ -1,9 +1,3 @@
-<h1 align="center">🎉 Flopperam has been acquired by <a href="https://www.tryaura.dev/?utm_source=youtube&utm_medium=video&utm_campaign=flop">Aura</a>!</h1>
-
-<p align="center">
-  Flopperam is now part of Aura. For the latest updates to the MCP and what we're building next, head over to <a href="https://www.tryaura.dev/?utm_source=youtube&utm_medium=video&utm_campaign=flop"><strong>tryaura.dev</strong></a>.
-</p>
-
 ---
 
 <p align="center">
