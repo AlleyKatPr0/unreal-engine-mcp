@@ -1,1 +1,3 @@
-Research into unreal MCP forked from Flopperam
+AI Research into unreal MCP, forked from Flopperam
+
+non-profit
